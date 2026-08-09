@@ -1,5 +1,45 @@
 # 변경 기록
 
+## 0.3.0 — 2026-08-09
+
+**Codex CLI 지원 추가.** Claude Code 만 보던 것을 Codex 세션도 함께 보게 했다.
+어느 한쪽만 써도, 둘 다 써도 그대로 동작한다(설치 안 된 쪽은 세션 디렉터리가
+없으니 조용히 건너뛴다).
+
+### 무엇이 새로운가
+
+- `~/.codex/sessions/**/rollout-*.jsonl` 을 스캔해 한도로 멈춘 Codex 세션을 찾는다.
+  `codex exec resume <세션id> <프롬프트> --dangerously-bypass-approvals-and-sandbox`
+  로 이어간다(Claude 의 `--resume` -`-dangerously-skip-permissions` 와 대응).
+- Codex 는 오류 종류를 구조화된 필드(`codex_error_info`: `usage_limit_exceeded`·
+  `unauthorized` 등)로 알려준다. Claude 처럼 텍스트를 정규식으로 추측할 필요가 없다.
+- **Codex CLI 버전마다 로그 형태가 다르다.** 실측(2026-08-09, 이 기기의 8월 로그
+  189건): 구버전(0.142.x)은 오류를 독립 `event_msg` 로 남기는데, 신버전(0.146.x)은
+  `task_complete` 이벤트 **안에 중첩**시킨다. 189건이 전부 후자였다 — 구버전 형태만
+  보게 짰으면 지금 버전에서 100% 놓쳤을 것이다. 둘 다 지원한다.
+- 로그인 만료 감지(`could not be refreshed`, `sign in again`)를 기존 Claude 의
+  `auth_expired` 전역 백오프 메커니즘에 그대로 얹었다 — 새 코드 없이 재사용된다.
+- 재개 프로세스의 stdin 을 명시적으로 닫는다(`subprocess.DEVNULL`). 실측: `codex exec`
+  가 프롬프트를 인자로 줘도 상황에 따라 "Reading additional input from stdin..." 를
+  찍고 stdin 을 더 읽으려 든다. 대화형 셸에서는 EOF 를 금방 만나 안 드러나지만,
+  launchd/systemd 처럼 stdin 이 열린 파이프로 붙는 스케줄러 아래에서는 아무도
+  안 닫아준 stdin 을 기다리며 영원히 멈출 위험이 있었다.
+- `codex_sessions_dir`(`CODEX_HOME` 환경변수 존중) · `codex_bin` · `enable_codex`
+  설정 추가.
+
+### 검증
+
+- 실제 `codex` CLI(v0.146.0)를 라이브로 호출해 재개 명령·stdin 처리·결과 분류를
+  확인했다 — 시뮬레이션이 아니라 진짜 프로세스를 실행한 결과다.
+- 실제로 오늘 한도에 걸린 진짜 세션 파일을 그대로 픽스처로 넣어 검출·시각 파싱을
+  검증했다.
+- 테스트 격리 버그도 하나 잡았다: 새 스캐너를 테스트 fixture 에 연결하면서 보니, 이
+  기기의 **진짜** `~/.codex/sessions`(수백 개 파일)가 무심코 테스트에 섞여 들어가고
+  있었다(스캔 시간 0.1초 → 12.8초로 급증해서 발견). `codex_sessions_dir` 를 tmp 로
+  격리하지 않으면 어떤 개발자 기기에서 돌리느냐에 따라 테스트 결과가 흔들리는
+  구조였다.
+- 회귀 테스트 14개 추가(총 96 통과).
+
 ## 0.2.3 — 2026-08-09
 
 0.2.2 에서 추가한 `windows-install` CI 가 첫 실행에서 바로 진짜 결함 두 종류를 잡았다.

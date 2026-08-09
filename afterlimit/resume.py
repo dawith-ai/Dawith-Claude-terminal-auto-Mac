@@ -32,15 +32,22 @@ class ResumeResult:
 
     @property
     def auth_expired(self) -> bool:
-        """claude CLI 로그인 자체가 풀렸다.
+        """CLI 로그인 자체가 풀렸다 (claude 또는 codex, 문구로 어느 쪽인지 알 필요 없다).
 
-        2026-08-08 실측: 로그인이 9시간 풀려 있는 동안 afterlimit 이 재개를 수십 번
-        시도했고, 매번 5~10초 만에 'Not logged in · Please run /login' 만 받고 실패했다.
-        세션 크기·한도와 무관한 **환경 전체의 전제조건**이라, 지출 한도와 달리
-        이건 정말로 전역이다 — 사람이 로그인하기 전엔 세션이 몇 줄이든 전부 막힌다.
+        2026-08-08 실측(claude): 로그인이 9시간 풀려 있는 동안 afterlimit 이 재개를
+        수십 번 시도했고, 매번 5~10초 만에 'Not logged in · Please run /login' 만
+        받고 실패했다. 세션 크기·한도와 무관한 **환경 전체의 전제조건**이라, 지출
+        한도와 달리 이건 정말로 전역이다 — 사람이 로그인하기 전엔 세션이 몇 줄이든
+        전부 막힌다. codex 실측 문구도 같은 부류: "Your access token could not be
+        refreshed ... Please sign in again."
         """
         blob = f"{self.output}\n{self.error}".lower()
-        return "not logged in" in blob or "please run /login" in blob
+        return (
+            "not logged in" in blob
+            or "please run /login" in blob
+            or "could not be refreshed" in blob
+            or "sign in again" in blob
+        )
 
     @property
     def limit_mentioned(self) -> bool:
@@ -75,7 +82,13 @@ def _run(cmd: list[str], cwd: str, timeout: int) -> tuple[int, str, str, float]:
     started = time.monotonic()
     try:
         p = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False,
+            # stdin 을 명시적으로 막는다. codex exec 는 프롬프트를 인자로 줘도 상황에 따라
+            # "Reading additional input from stdin..." 를 찍고 stdin 을 더 읽으려 든다
+            # (실측, 2026-08-09). 대화형 셸에서는 EOF 를 금방 만나 문제가 안 드러나지만,
+            # launchd/systemd 처럼 stdin 이 열린 파이프로 붙는 스케줄러 아래에서는
+            # 아무도 안 닫아준 stdin 을 기다리며 영원히 멈출 수 있다.
+            stdin=subprocess.DEVNULL,
         )
         return p.returncode, p.stdout, p.stderr, time.monotonic() - started
     except subprocess.TimeoutExpired:
@@ -84,17 +97,39 @@ def _run(cmd: list[str], cwd: str, timeout: int) -> tuple[int, str, str, float]:
         return 127, "", f"{cmd[0]} 를 찾을 수 없습니다", time.monotonic() - started
 
 
+def _resume_cmd(session: BlockedSession, cfg: Config, prompt: str) -> list[str]:
+    """이어가기 명령. provider 마다 CLI 가 다르다."""
+    if session.provider == "codex":
+        # codex exec resume <세션id> <프롬프트> — claude --resume <id> -p <프롬프트> 와 대응.
+        # --dangerously-bypass-approvals-and-sandbox 가 claude 의
+        # --dangerously-skip-permissions 대응. 둘 다 무인 실행 전제이므로 대칭을 맞춘다.
+        return [
+            cfg.codex_bin, "exec", "resume", session.session_id, prompt,
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+    return [
+        cfg.claude_bin, "--resume", session.session_id, "-p", prompt,
+        "--output-format", "text", "--max-turns", "60", "--dangerously-skip-permissions",
+    ]
+
+
+def _fresh_cmd(session: BlockedSession, cfg: Config, prompt: str) -> list[str]:
+    """세션 못 찾음 등으로 이어갈 수 없을 때 맥락만 프롬프트에 실어 새로 시작."""
+    if session.provider == "codex":
+        return [cfg.codex_bin, "exec", prompt, "--dangerously-bypass-approvals-and-sandbox"]
+    return [
+        cfg.claude_bin, "-p", prompt,
+        "--output-format", "text", "--max-turns", "60", "--dangerously-skip-permissions",
+    ]
+
+
 def resume(session: BlockedSession, cfg: Config) -> ResumeResult:
     """세션 하나를 이어서 실행한다. dry_run 이면 아무것도 하지 않는다."""
     if cfg.dry_run:
         return ResumeResult(True, False, f"[dry-run] {session.session_id} 재개 예정", "", 0.0)
 
-    flags = ["--output-format", "text", "--max-turns", "60", "--dangerously-skip-permissions"]
-
     rc, out, err, elapsed = _run(
-        [cfg.claude_bin, "--resume", session.session_id, "-p", cfg.resume_prompt, *flags],
-        session.cwd,
-        cfg.invoke_timeout_sec,
+        _resume_cmd(session, cfg, cfg.resume_prompt), session.cwd, cfg.invoke_timeout_sec
     )
     result = ResumeResult(rc == 0, False, out, err, elapsed)
 
@@ -119,9 +154,7 @@ def resume(session: BlockedSession, cfg: Config) -> ResumeResult:
             "[Instruction]\n"
         )
     rc, out, err, elapsed2 = _run(
-        [cfg.claude_bin, "-p", context + cfg.resume_prompt, *flags],
-        session.cwd,
-        cfg.invoke_timeout_sec,
+        _fresh_cmd(session, cfg, context + cfg.resume_prompt), session.cwd, cfg.invoke_timeout_sec
     )
     retry = ResumeResult(rc == 0, True, out, err, elapsed + elapsed2)
     # 새로 시작해도 즉시 튕기면 백오프가 걸리게 실패로 돌려준다.

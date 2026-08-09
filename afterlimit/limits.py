@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from typing import Literal
 
-__all__ = ["LimitInfo", "LimitKind", "local_tz", "parse_limit"]
+__all__ = ["LimitInfo", "LimitKind", "local_tz", "parse_limit", "parse_codex_limit"]
 
-LimitKind = Literal["usage", "server_rate", "spend", "stalled"]
+LimitKind = Literal["usage", "server_rate", "spend", "stalled", "codex"]
 
 #: 한도 메시지로 볼 표지. 하나라도 없으면 한도가 아니다.
 LIMIT_PATTERNS: tuple[str, ...] = (
@@ -177,3 +177,77 @@ def parse_limit(text: str, *, anchor: datetime, now: datetime | None = None) -> 
         else _resolve_time_only(hour, minute, anchor, now)
     )
     return LimitInfo("usage", reset, m.group(0))
+
+
+# ── Codex CLI ──────────────────────────────────────────────────────────────
+#
+# Codex 는 세션 로그에 구조화된 필드를 남긴다(`codex_error_info: "usage_limit_exceeded"`
+# 등). 어떤 오류인지 텍스트로 추측할 필요가 없어 Claude 쪽보다 신뢰도가 높다.
+# 다만 "언제 풀리는지"는 여전히 자유 텍스트라 파싱이 필요하다.
+#
+# 실측 문구 (2026-08 세션 로그 + 라이브 재현):
+#   "...try again at 12:09 AM."
+#   "...try again at May 3rd, 2026 12:09 AM."
+# 뒤쪽은 연도까지 있어 anchor 없이도 절대 시각이 나온다(다만 시간대는 여전히
+# 벽시계 표기라 anchor 의 시간대를 그대로 쓴다 — Claude 쪽과 같은 제약).
+
+CODEX_MONTHS = _MONTHS  # 같은 표를 재사용
+
+CODEX_RESET_DATED_RE = re.compile(
+    r"try again at "
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+"
+    r"(\d{1,2})(?:st|nd|rd|th)?,\s+(\d{4})\s+"
+    r"(\d{1,2}):(\d{2})\s*(am|pm)\.",
+    re.IGNORECASE,
+)
+CODEX_RESET_TIME_ONLY_RE = re.compile(
+    r"try again at (\d{1,2}):(\d{2})\s*(am|pm)\.",
+    re.IGNORECASE,
+)
+
+
+def parse_codex_limit(text: str, *, anchor: datetime, now: datetime | None = None) -> LimitInfo | None:
+    """Codex 세션 로그(`codex_error_info`)나 `codex exec` 출력에서 한도 정보를 뽑는다.
+
+    Args:
+        text: 오류 메시지 원문. 예: "You've hit your usage limit. ... try again at 12:09 AM."
+        anchor: 오류가 발생한 시점 (tz-aware).
+        now: 현재 시각. 생략하면 anchor 의 시간대로 지금을 쓴다.
+    """
+    if anchor.tzinfo is None:
+        raise ValueError("anchor 는 tz-aware 여야 합니다 (시간대를 추측하지 않습니다)")
+    if now is None:
+        now = datetime.now(anchor.tzinfo)
+
+    if "usage limit" not in text.lower():
+        return None
+
+    m = CODEX_RESET_DATED_RE.search(text)
+    if m:
+        month, day, year, hour_s, minute_s, ampm = m.groups()
+        hour = int(hour_s)
+        if ampm.lower() == "pm" and hour != 12:
+            hour += 12
+        elif ampm.lower() == "am" and hour == 12:
+            hour = 0
+        try:
+            reset = anchor.replace(
+                year=int(year), month=CODEX_MONTHS[month.lower()], day=int(day),
+                hour=hour, minute=int(minute_s), second=0, microsecond=0,
+            )
+        except ValueError:
+            reset = anchor + timedelta(hours=1)  # 2월 30일 같은 실재하지 않는 날짜
+        return LimitInfo("codex", reset, m.group(0))
+
+    m = CODEX_RESET_TIME_ONLY_RE.search(text)
+    if m:
+        hour_s, minute_s, ampm = m.groups()
+        hour = int(hour_s)
+        if ampm.lower() == "pm" and hour != 12:
+            hour += 12
+        elif ampm.lower() == "am" and hour == 12:
+            hour = 0
+        reset = _resolve_time_only(hour, int(minute_s), anchor, now)
+        return LimitInfo("codex", reset, m.group(0))
+
+    return LimitInfo("codex", None, text[:200])  # 한도는 맞는데 시각을 못 뽑음

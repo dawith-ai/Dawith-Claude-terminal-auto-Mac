@@ -47,7 +47,15 @@ def _write_session(tmp_path, *, project="proj", session_id="abc", lines, mtime=N
 
 @pytest.fixture
 def cfg(tmp_path):
-    return Config(projects_dir=tmp_path / "projects", state_dir=tmp_path / "state")
+    # codex_sessions_dir 도 tmp 밑으로 격리한다 — 안 그러면 기본값이 실제
+    # ~/.codex/sessions 를 가리켜서, 이 기기의 진짜 Codex 사용 기록이 테스트에
+    # 섞여 들어간다(느려지는 것은 물론, 어떤 세션이 걸리느냐에 따라 결과가
+    # 흔들리는 테스트 격리 버그였다 — 실측: 스캔 시간 0.1초 → 12.8초로 급증).
+    return Config(
+        projects_dir=tmp_path / "projects",
+        state_dir=tmp_path / "state",
+        codex_sessions_dir=tmp_path / "codex",
+    )
 
 
 # ── 이식성 ──────────────────────────────────────────────────────────────
@@ -152,7 +160,11 @@ def test_cwd가_없으면_재개할_수_없다(tmp_path, cfg):
 
 
 def test_projects_디렉터리가_없어도_죽지_않는다(tmp_path):
-    cfg = Config(projects_dir=tmp_path / "없음", state_dir=tmp_path / "state")
+    cfg = Config(
+        projects_dir=tmp_path / "없음",
+        state_dir=tmp_path / "state",
+        codex_sessions_dir=tmp_path / "codex_없음",
+    )
     assert scan_blocked(cfg, now=NOW) == []
 
 

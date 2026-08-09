@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from afterlimit.config import Config
-from afterlimit.limits import LIMIT_PATTERNS, LimitInfo, local_tz, parse_limit
+from afterlimit.limits import LIMIT_PATTERNS, LimitInfo, local_tz, parse_codex_limit, parse_limit
 
 __all__ = ["BlockedSession", "scan_blocked", "session_started_at"]
 
@@ -30,9 +30,15 @@ class BlockedSession:
     started_at: datetime | None
     last_user: str = ""
     last_assistant: str = ""
+    #: 어느 CLI 의 세션인지. resume.py 가 이걸 보고 재개 명령을 고른다.
+    provider: str = "claude"
 
     @property
     def project(self) -> str:
+        # Codex 는 파일이 프로젝트별이 아니라 날짜별 폴더(.../2026/08/07/)에 쌓인다.
+        # 폴더명을 그대로 쓰면 "07" 처럼 의미 없는 표시가 된다 — cwd 이름을 쓴다.
+        if self.provider == "codex":
+            return Path(self.cwd).name or self.cwd
         return self.jsonl.parent.name
 
 
@@ -276,18 +282,145 @@ def _inspect(jsonl: Path, cfg: Config, now: datetime) -> BlockedSession | None:
     )
 
 
-def scan_blocked(cfg: Config, now: datetime | None = None) -> list[BlockedSession]:
-    """한도로 멈춘 세션 목록. 최근에 막힌 것부터."""
-    if now is None:
-        now = datetime.now(local_tz())
+def _scan_claude_blocked(cfg: Config, now: datetime) -> list[BlockedSession]:
     if not cfg.projects_dir.exists():
         return []
-
-    found = [
+    return [
         session
         for proj in sorted(cfg.projects_dir.iterdir())
         if proj.is_dir()
         for jsonl in sorted(proj.glob("*.jsonl"))
         if (session := _inspect(jsonl, cfg, now)) is not None
     ]
+
+
+# ── Codex CLI ──────────────────────────────────────────────────────────────
+#
+# 세션은 `~/.codex/sessions/YYYY/MM/DD/rollout-<시각>-<uuid>.jsonl` 에 쌓인다.
+# Claude 와 다르게 레코드가 구조화돼 있다:
+#   {"type": "session_meta", "payload": {"session_id": ..., "cwd": ..., "timestamp": ...}}
+#   {"type": "event_msg", "payload": {"type": "error", "codex_error_info": "usage_limit_exceeded",
+#                                      "message": "...try again at 12:09 AM."}}
+# `codex_error_info` 가 있어 텍스트로 오류 종류를 추측할 필요가 없다.
+
+
+def _codex_session_meta(jsonl: Path) -> tuple[str | None, str | None, datetime | None]:
+    """`session_id`, `cwd`, 시작시각. 첫 줄이 `session_meta` 라는 실측 구조에 기댄다."""
+    try:
+        with jsonl.open("r", encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+    except OSError:
+        return None, None, None
+    try:
+        obj = json.loads(first)
+    except json.JSONDecodeError:
+        return None, None, None
+    if obj.get("type") != "session_meta":
+        return None, None, None
+    payload = obj.get("payload") or {}
+    sid = payload.get("session_id")
+    cwd = payload.get("cwd")
+    started = None
+    ts = payload.get("timestamp")
+    if isinstance(ts, str):
+        try:
+            started = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return sid, cwd, started
+
+
+def _codex_last_record(lines: list[str]) -> dict | None:
+    for line in reversed(lines):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _codex_error_payload(payload: dict) -> dict | None:
+    """오류 정보(`message`·`codex_error_info`)가 든 부분을 뽑는다. Codex 버전마다 자리가 다르다.
+
+    ⚠️ 실측(2026-08-09): 이 기기의 8월 로그 189건이 **전부** 아래 형태였다 — 예전(0.142.x)
+    형태는 하나도 없었다. 예전 형태만 보게 짰으면 지금 버전에서 100% 놓쳤을 것이다.
+    양쪽 다 지원해야 버전이 섞인 실환경(사용자마다 Codex 버전이 다르다)에서 안 놓친다.
+      - 구버전: {"type": "error", "codex_error_info": ..., "message": ...}   (최상위)
+      - 신버전: {"type": "task_complete", "error": {"codex_error_info": ..., "message": ...}}
+    """
+    if payload.get("type") == "error":
+        return payload
+    if payload.get("type") == "task_complete":
+        err = payload.get("error")
+        if isinstance(err, dict):
+            return err
+    return None
+
+
+def _inspect_codex(jsonl: Path, cfg: Config, now: datetime) -> BlockedSession | None:
+    """세션 파일 하나를 보고 막혔으면 BlockedSession, 아니면 None. Claude 쪽 `_inspect` 와 대응."""
+    try:
+        mtime_ts = jsonl.stat().st_mtime
+    except OSError:
+        return None
+
+    tz = now.tzinfo or local_tz()
+    blocked_at = datetime.fromtimestamp(mtime_ts, tz=tz)
+    if blocked_at < now - timedelta(hours=cfg.active_within_hours):
+        return None
+
+    sid, cwd, started = _codex_session_meta(jsonl)
+    if not sid or not cwd:
+        return None  # 어디서 이어갈지 모르면 재개할 수 없다
+    if started and started < now - timedelta(days=cfg.max_session_age_days):
+        return None
+
+    lines = _read_last_lines(jsonl)
+    if not lines:
+        return None
+    last = _codex_last_record(lines)
+    if not last or last.get("type") != "event_msg":
+        return None  # 오류 뒤에 뭔가 더 진행됐다 = 이미 안 막혀 있다
+    err = _codex_error_payload(last.get("payload") or {})
+    if err is None:
+        return None
+
+    message = str(err.get("message") or "")
+    error_info = err.get("codex_error_info")
+    if error_info == "usage_limit_exceeded":
+        limit = parse_codex_limit(message, anchor=blocked_at, now=now)
+    else:
+        # unauthorized(로그인 만료) 등. 시간으로 안 풀리는 것이라 해제 시각이 없다 —
+        # 세션별 백오프가 속도를 정하고, 실제 재개 시도에서 또 로그인 오류가 나오면
+        # resume.py 의 auth_expired 전역 감지가 나머지 사이클을 접는다.
+        limit = LimitInfo("codex", None, message[:200])
+    if limit is None:
+        return None
+
+    return BlockedSession(
+        session_id=sid,
+        jsonl=jsonl,
+        cwd=cwd,
+        limit=limit,
+        blocked_at=blocked_at,
+        started_at=started,
+        provider="codex",
+    )
+
+
+def _scan_codex_blocked(cfg: Config, now: datetime) -> list[BlockedSession]:
+    if not cfg.enable_codex or not cfg.codex_sessions_dir.exists():
+        return []
+    return [
+        session
+        for jsonl in sorted(cfg.codex_sessions_dir.glob("**/rollout-*.jsonl"))
+        if (session := _inspect_codex(jsonl, cfg, now)) is not None
+    ]
+
+
+def scan_blocked(cfg: Config, now: datetime | None = None) -> list[BlockedSession]:
+    """한도로 멈춘 세션 목록(Claude Code + Codex). 최근에 막힌 것부터."""
+    if now is None:
+        now = datetime.now(local_tz())
+    found = _scan_claude_blocked(cfg, now) + _scan_codex_blocked(cfg, now)
     return sorted(found, key=lambda s: s.blocked_at, reverse=True)

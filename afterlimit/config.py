@@ -39,11 +39,24 @@ def config_path() -> Path:
     return _xdg("XDG_CONFIG_HOME", ".config") / "afterlimit" / "config.json"
 
 
+def _codex_home() -> Path:
+    """Codex CLI 자신과 같은 규칙. `CODEX_HOME` 을 존중한다 — 그래야 사용자가 커스텀
+    위치를 썼을 때도 같은 곳을 본다."""
+    raw = os.environ.get("CODEX_HOME")
+    return Path(raw) if raw else Path.home() / ".codex"
+
+
 @dataclass(frozen=True)
 class Config:
     #: Claude Code 가 세션 기록을 쌓는 곳
     projects_dir: Path = field(default_factory=lambda: Path.home() / ".claude" / "projects")
     state_dir: Path = field(default_factory=state_dir)
+
+    #: Codex CLI 가 세션 기록을 쌓는 곳. 디렉터리가 없으면 조용히 건너뛴다(설치 안 한 사람도 많다).
+    codex_sessions_dir: Path = field(default_factory=lambda: _codex_home() / "sessions")
+    codex_bin: str = "codex"
+    #: Codex 도 함께 감시할지. 끄면 Claude Code 만 본다(0.2.x 이전 동작).
+    enable_codex: bool = True
 
     #: 이 시간 안에 활동이 있던 세션만 본다
     active_within_hours: int = 12
@@ -109,7 +122,9 @@ class Config:
         if unknown:
             raise ValueError(f"알 수 없는 설정 항목: {', '.join(sorted(unknown))}")
         coerced = {
-            k: Path(v).expanduser() if k in ("projects_dir", "state_dir") else v
+            k: Path(v).expanduser()
+            if k in ("projects_dir", "state_dir", "codex_sessions_dir")
+            else v
             for k, v in data.items()
         }
         return replace(self, **coerced)

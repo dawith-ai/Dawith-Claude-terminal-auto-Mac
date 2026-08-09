@@ -103,9 +103,14 @@ afterlimit config   # 어디를 보는지, 시간대, 알림 설정
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "진행 중이던 작업을 이어서 하세요...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+Codex 세션 디렉터리가 없으면(설치 안 했으면) 조용히 건너뜁니다 — 아무것도 안 켤 이유가 없습니다. `enable_codex`를 `false`로 두면 Claude Code만 봅니다(0.2.x 이전 동작).
 
 알림은 JSON을 받는 웹훅이면 어디로든 갑니다 — Slack, Discord, 또는 직접 만든 엔드포인트(페이로드 형식은 URL을 보고 고릅니다). 웹훅이 없으면 알림도 없고, 그 외에는 아무것도 바뀌지 않습니다. 환경변수 `AFTERLIMIT_WEBHOOK_URL`로도 설정할 수 있습니다.
 
@@ -127,11 +132,12 @@ afterlimit --dry-run run    # 무엇을 재개할지만 보여주고 아무것�
 
 AfterLimit은 **헤드리스** 세션을 재개합니다 — 에이전트가 켜져 있을 필요가 없습니다. 로그를 읽어 작업을 이어갑니다. 그래서 에디터·터미널을 가리지 않습니다: 일반 터미널에서 Claude Code를 쓰든, VS Code에서 쓰든, 어디서든 동작합니다.
 
+**Claude Code와 Codex CLI를 둘 다 봅니다.** 세션 로그가 있는 쪽만 스캔하므로 둘 중 하나만 써도, 둘 다 써도 그대로 동작합니다. Codex는 오류 종류를 구조화된 필드(`codex_error_info`)로 알려줘 텍스트 추측이 필요 없습니다 — 두 CLI 버전이 로그 형태를 다르게 남기는 경우(구버전 독립 오류 이벤트 / 신버전 `task_complete` 내 중첩)도 둘 다 지원합니다.
+
 아직 다루지 않는 것, 정직하게 밝힙니다:
 
 - **대화형 TUI 재개** — *실행 중인* tmux 창 안에서 대화 도중 멈췄을 때 "continue"를 눌러주는 것. 이전 프로토타입이 이걸 했지만 tmux 전용이고 취약해서, 반쪽짜리로 내보내는 대신 향후 선택형 모드로 남겨두었습니다.
-- **다른 에이전트** — 지금은 세션 로그 형식이 Claude Code 기준입니다. 한도 파싱 코어 자체는 에이전트에 종속되지 않으므로, 다른 CLI용 어댑터 기여를 환영합니다.
-- **Windows** — 스케줄러 배선은 macOS/Linux용입니다. Python 코어는 이식 가능합니다.
+- **그 밖의 에이전트** — Claude Code·Codex 다음은 세션 로그 형식만 알면 됩니다. 다른 CLI용 어댑터 기여를 환영합니다.
 
 ## 설계 노트
 
