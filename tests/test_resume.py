@@ -147,3 +147,13 @@ def test_로그인_풀림_문구를_인식한다():
 def test_평범한_실패는_인증만료가_아니다():
     r = ResumeResult(False, False, "usage limit reached", "", 5.0)
     assert not r.auth_expired
+
+def test_max_turns_도달을_인식한다():
+    r = ResumeResult(False, False, "", "Error: Reached max turns (60)", 30.0)
+    assert r.max_turns_exceeded
+    assert not r.hit_limit_again        # 한도 문구가 아니라 완전히 다른 실패 종류다
+    assert not r.auth_expired
+
+def test_정상_완료는_max_turns_도달이_아니다():
+    r = ResumeResult(True, False, "작업을 이어서 마쳤습니다.", "", 120.0)
+    assert not r.max_turns_exceeded

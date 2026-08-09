@@ -131,6 +131,10 @@ def _acquire_lock(cfg: Config) -> Path | None:
 _BACKOFF = [timedelta(hours=h) for h in (1, 2, 4, 8, 16)]
 _BACKOFF_MAX = timedelta(hours=24)
 
+#: 같은 세션이 max-turns 로 이 횟수만큼 연속 미완료되면 자동 재시도만으로는 안 풀린다고
+#: 보고 알림을 보낸다 (fails 카운터는 hit_limit_again 과 같은 트랙을 공유한다).
+MAX_TURNS_ALERT_FAILS = 3
+
 
 def backoff_for(fails: int) -> timedelta:
     """실패 `fails` 회 뒤 기다릴 시간. 1·2·4·8·16시간으로 늘고 24시간에서 멈춘다."""
@@ -304,6 +308,32 @@ def cmd_run(cfg: Config) -> int:
                 tried = " · 새로 시작도 시도함" if result.fallback else ""
                 print(f"  └ 한도 재차단({entry['fails']}회) · {result.elapsed_sec:.0f}초 · "
                       f"산출 {result.work_chars}자{tried} → {wait:.0f}시간 뒤 재시도")
+                continue
+
+            if not result.ok and result.max_turns_exceeded:
+                # `--max-turns` 상한에 걸려 미완료로 끝났다 — 완료가 아니다. resumed_at 을
+                # 찍으면 다음 사이클이 5시간 쿨다운에 막혀 사실상 다시 시도되지 않는다
+                # (2026-08-10 실측). hit_limit_again 과 같은 fails/backoff 트랙에 남겨
+                # 다음 사이클에 다시 붙게 하고, 연속 실패가 쌓이면 사람에게 알린다.
+                def _fail_max_turns(s: dict) -> None:
+                    e = s.setdefault(sid, {})
+                    e["project"] = proj
+                    e["fails"] = int(e.get("fails", 0) or 0) + 1
+                    e["failed_at"] = now.isoformat()
+
+                _commit(cfg, _fail_max_turns)
+                state = _load_state(cfg)
+                entry = state.get(sid, {})
+                fails = entry["fails"]
+                wait = backoff_for(fails).total_seconds() / 3600
+                print(f"  └ 최대턴(60) 도달({fails}회) · {result.elapsed_sec:.0f}초 · "
+                      f"산출 {result.work_chars}자 → {wait:.0f}시간 뒤 재시도")
+                if fails >= MAX_TURNS_ALERT_FAILS:
+                    notify(
+                        cfg,
+                        f"[afterlimit] {session.project} 최대턴(60) 도달이 {fails}회 연속 "
+                        f"— 자동 재시도로는 안 풀립니다. 확인이 필요합니다.",
+                    )
                 continue
 
             def _ok(s: dict) -> None:

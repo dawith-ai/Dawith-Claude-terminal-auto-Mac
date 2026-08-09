@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -296,3 +297,65 @@ def test_windows_에서는_OpenProcess_로_존재를_확인한다(monkeypatch):
     gone = _FakeCtypes(handle=0, last_error=87)  # ERROR_INVALID_PARAMETER
     monkeypatch.setitem(_sys.modules, "ctypes", gone)
     assert cli._pid_exists(1234) is False
+
+
+# ── max-turns 오분류 회귀 (2026-08-10) ──────────────────────────────────
+#
+# `claude --resume` 이 "Error: Reached max turns (60)" 로 미완료 종료됐는데도
+# hit_limit_again(한도 문구)이 아니라서 `_ok` 경로를 타 resumed_at 이 찍혔다.
+# 그러면 다음 사이클이 5시간 쿨다운(_due)에 막혀 사실상 재시도가 안 됐다.
+
+def test_max_turns_도달은_완료로_기록되지_않는다(tmp_path, monkeypatch):
+    from afterlimit.resume import ResumeResult
+
+    from pathlib import Path
+
+    cfg = Config(state_dir=tmp_path / "state")
+    s = _session()
+    s = replace(s, jsonl=Path("/work/repo/session.jsonl"))
+    monkeypatch.setattr(cli, "scan_blocked", lambda cfg, now: [s])
+    monkeypatch.setattr(
+        cli, "resume",
+        lambda session, cfg: ResumeResult(False, False, "", "Error: Reached max turns (60)", 30.0),
+    )
+
+    assert cli.cmd_run(cfg) == 0
+
+    state = cli._load_state(cfg)
+    entry = state[s.session_id]
+    assert "resumed_at" not in entry     # 완료로 기록되면 안 된다
+    assert entry["fails"] == 1
+    assert "failed_at" in entry
+    # 5시간 고정 쿨다운이 아니라 실패 backoff(1시간)를 탄다 — 더 빨리 재시도된다
+    failed_at = datetime.fromisoformat(entry["failed_at"])
+    assert cli._due(s, state, cfg, failed_at + timedelta(hours=1, minutes=1)) is None
+
+
+def test_max_turns_연속_실패는_알림_임계에_도달한다(tmp_path, monkeypatch):
+    from afterlimit.resume import ResumeResult
+
+    from pathlib import Path
+
+    cfg = Config(state_dir=tmp_path / "state")
+    s = _session()
+    s = replace(s, jsonl=Path("/work/repo/session.jsonl"))
+    monkeypatch.setattr(cli, "scan_blocked", lambda cfg, now: [s])
+    monkeypatch.setattr(
+        cli, "resume",
+        lambda session, cfg: ResumeResult(False, False, "", "Error: Reached max turns (60)", 30.0),
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(cli, "notify", lambda cfg, text: sent.append(text) or True)
+
+    for _ in range(cli.MAX_TURNS_ALERT_FAILS):
+        assert cli.cmd_run(cfg) == 0
+        # 다음 사이클도 즉시 재시도되게, 이번 실패의 backoff 를 넘겨서 시각을 고정한다
+        state = cli._load_state(cfg)
+        entry = state[s.session_id]
+        failed_at = datetime.fromisoformat(entry["failed_at"])
+        cli._save_state(cfg, {
+            **state,
+            s.session_id: {**entry, "failed_at": (failed_at - timedelta(days=1)).isoformat()},
+        })
+
+    assert sent  # 임계 도달 시 알림이 나갔다

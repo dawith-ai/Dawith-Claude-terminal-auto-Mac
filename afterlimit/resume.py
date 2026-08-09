@@ -65,6 +65,18 @@ class ResumeResult:
         return len("\n".join(keep).strip())
 
     @property
+    def max_turns_exceeded(self) -> bool:
+        """`--max-turns` 상한(60)에 걸려 미완료로 끝났다 — 한도가 아니라 진짜 실패다.
+
+        2026-08-10 실측: `claude --resume` 이 "Error: Reached max turns (60)" 를 남기고
+        rc!=0 으로 끝난 세션이 `_ok` 경로로 잡혀 `resumed_at` 이 찍혔다. hit_limit_again
+        도 아니라서(한도 문구가 없다) 그대로 지나가 '완료'와 똑같이 취급됐고, 실제로는
+        끝내지 못한 작업이 5시간 쿨다운에 갇혀 사실상 재시도가 안 됐다.
+        """
+        blob = f"{self.output}\n{self.error}".lower()
+        return "reached max turns" in blob
+
+    @property
     def hit_limit_again(self) -> bool:
         """재개했는데 **아무것도 못 하고** 한도에 걸렸나.
 
