@@ -11,7 +11,7 @@ from afterlimit.config import Config
 
 def test_설정_없이도_기본값으로_동작한다(tmp_path):
     cfg = Config.load(tmp_path / "없음.json")
-    assert cfg.max_resume_per_cycle == 1
+    assert cfg.max_resume_per_cycle == 2
     assert cfg.webhook_url is None
     assert cfg.claude_bin == "claude"
 

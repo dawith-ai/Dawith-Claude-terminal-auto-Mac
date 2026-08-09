@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -418,9 +419,47 @@ def _scan_codex_blocked(cfg: Config, now: datetime) -> list[BlockedSession]:
     ]
 
 
+def _run_agents_list(cfg: Config) -> str:
+    """`claude agents --json --all` 원출력. 실패는 호출부가 처리한다 —
+    여기선 그대로 던진다(테스트에서 이 함수만 목으로 바꿔치기하기 위함, resume.py 의
+    `_run` 과 같은 패턴)."""
+    proc = subprocess.run(
+        [cfg.claude_bin, "agents", "--json", "--all"],
+        capture_output=True,
+        text=True,
+        timeout=5,  # 스캔 사이클을 절대 눈에 띄게 늦추지 않는다
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude agents exited {proc.returncode}: {proc.stderr[:200]}")
+    return proc.stdout
+
+
+def _interactive_session_ids(cfg: Config) -> set[str]:
+    """지금 사용자가 터미널에서 보고 있는(interactive) 세션 id 집합.
+    바이너리가 없거나, 타임아웃이거나, JSON 이 깨졌거나, 스키마가 예상과 다르면
+    조용히 빈 집합을 돌려준다 — 호출부는 그러면 순수 blocked_at 내림차순으로
+    되돌아간다. 여기서 죽으면 스캔 전체가 죽으므로 절대 raise 하지 않는다."""
+    try:
+        raw = _run_agents_list(cfg)
+        data = json.loads(raw)
+        return {
+            item["sessionId"]
+            for item in data
+            if isinstance(item, dict) and item.get("kind") == "interactive" and item.get("sessionId")
+        }
+    except Exception:
+        return set()
+
+
 def scan_blocked(cfg: Config, now: datetime | None = None) -> list[BlockedSession]:
-    """한도로 멈춘 세션 목록(Claude Code + Codex). 최근에 막힌 것부터."""
+    """한도로 멈춘 세션 목록(Claude Code + Codex). interactive 세션이 먼저,
+    그다음 최근에 막힌 것부터 — 사용자가 지금 보고 있는 터미널을 뒤에서
+    기다리게 하지 않기 위함(2026-08-09 실측: 11개 동시 한도 + max_resume=1 로
+    1~3시간 대기)."""
     if now is None:
         now = datetime.now(local_tz())
     found = _scan_claude_blocked(cfg, now) + _scan_codex_blocked(cfg, now)
-    return sorted(found, key=lambda s: s.blocked_at, reverse=True)
+    found = sorted(found, key=lambda s: s.blocked_at, reverse=True)
+    interactive_ids = _interactive_session_ids(cfg)
+    # 안정 정렬이라 blocked_at 순서는 그룹 내부에서 그대로 유지된다.
+    return sorted(found, key=lambda s: s.session_id not in interactive_ids)

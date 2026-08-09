@@ -62,8 +62,13 @@ class Config:
     active_within_hours: int = 12
     #: 세션이 처음 만들어진 지 이만큼 지났으면 죽은 백로그로 보고 건드리지 않는다
     max_session_age_days: int = 3
-    #: 한 사이클에 재개할 세션 수. 과하게 두드리지 않기 위한 상한
-    max_resume_per_cycle: int = 1
+    #: 한 사이클에 재개할 세션 수. 과하게 두드리지 않기 위한 상한.
+    #: 원래 5 → 2 → 1 로 낮췄다(동시 재개가 5시간 계정 한도를 한 번에 태워서).
+    #: 2 로 다시 올린 이유: scan_blocked 가 이제 interactive 세션을 먼저 배치하므로,
+    #: 1이면 그 뒤에 background 세션 하나가 끼어들 때마다 사용자가 보는 세션이
+    #: 한 사이클(120초) 씩 밀린다. 2 는 그 여유를 주면서도 대량 동시 소진 위험은
+    #: 여전히 낮다(5였을 때와 비교해 5분의 2 수준).
+    max_resume_per_cycle: int = 2
     #: 같은 세션을 다시 재개하기까지의 최소 간격
     resume_cooldown_hours: int = 5
     #: 재개 1회의 최대 실행 시간

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,6 +14,16 @@ from afterlimit.sessions import BlockedSession, scan_blocked, session_started_at
 
 SEOUL = ZoneInfo("Asia/Seoul")
 NOW = datetime(2026, 7, 17, 14, 0, tzinfo=SEOUL)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_agents_list():
+    """`claude agents --json --all` 을 실제로 부르지 않는다 — 테스트 환경엔 그
+    바이너리가 없거나, 있어도 이 기기의 실제 세션 목록이 테스트 결과를 흔든다.
+    기본은 '아무것도 못 얻음' = 기존 순수 blocked_at 정렬과 동일하게 동작.
+    개별 테스트는 이 patch 를 자기 것으로 덮어써서 interactive 목록을 준다."""
+    with patch("afterlimit.sessions._run_agents_list", return_value="[]"):
+        yield
 
 
 def _line(**kw) -> str:
@@ -211,3 +222,50 @@ def test_여러_세션은_최근에_막힌_것부터(tmp_path, cfg):
     _write_session(tmp_path, project="b", session_id="new", lines=[_limit_msg()],
                    mtime=NOW - timedelta(hours=1))
     assert [s.session_id for s in scan_blocked(cfg, now=NOW)] == ["new", "old"]
+
+
+# ── interactive 우선순위 ──────────────────────────────────────────────────
+
+def test_interactive_세션이_먼저_배치된다(tmp_path, cfg):
+    """오래전에 막힌 interactive 세션도, 방금 막힌 background 세션보다 앞선다 —
+    사용자가 지금 보고 있는 터미널을 뒤에서 기다리게 하지 않기 위함."""
+    _write_session(tmp_path, project="a", session_id="watched", lines=[_limit_msg()],
+                   mtime=NOW - timedelta(hours=3))
+    _write_session(tmp_path, project="b", session_id="bg1", lines=[_limit_msg()],
+                   mtime=NOW - timedelta(hours=2))
+    _write_session(tmp_path, project="c", session_id="bg2", lines=[_limit_msg()],
+                   mtime=NOW - timedelta(hours=1))
+
+    agents_json = json.dumps([
+        {"sessionId": "watched", "kind": "interactive"},
+        {"sessionId": "bg1", "kind": "background"},
+    ])
+    with patch("afterlimit.sessions._run_agents_list", return_value=agents_json):
+        found = [s.session_id for s in scan_blocked(cfg, now=NOW)]
+
+    # interactive("watched") 가 맨 앞. 나머지는 기존처럼 blocked_at 내림차순.
+    assert found == ["watched", "bg2", "bg1"]
+
+
+def test_agents_조회_실패시_blocked_at_정렬로_폴백한다(tmp_path, cfg):
+    """`claude agents --json --all` 이 어떤 이유로든 실패하면(바이너리 없음,
+    타임아웃, 깨진 JSON, 예상 밖 스키마) scan_blocked 는 죽지 않고 조용히
+    원래의 blocked_at 내림차순 정렬로 돌아간다."""
+    _write_session(tmp_path, project="a", session_id="old", lines=[_limit_msg()],
+                   mtime=NOW - timedelta(hours=3))
+    _write_session(tmp_path, project="b", session_id="new", lines=[_limit_msg()],
+                   mtime=NOW - timedelta(hours=1))
+
+    failure_modes = [
+        FileNotFoundError("claude: command not found"),
+        TimeoutError("timed out"),
+        RuntimeError("claude agents exited 1: boom"),
+    ]
+    for exc in failure_modes:
+        with patch("afterlimit.sessions._run_agents_list", side_effect=exc):
+            assert [s.session_id for s in scan_blocked(cfg, now=NOW)] == ["new", "old"]
+
+    # 실행은 됐지만 쓰레기 JSON / 예상 밖 스키마인 경우도 마찬가지
+    for garbage in ["not json", "{}", json.dumps([{"no_kind_here": True}]), json.dumps("just a string")]:
+        with patch("afterlimit.sessions._run_agents_list", return_value=garbage):
+            assert [s.session_id for s in scan_blocked(cfg, now=NOW)] == ["new", "old"]
