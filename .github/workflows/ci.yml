@@ -73,3 +73,38 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck install.sh
+
+  macos-install:
+    # install.sh 를 실제로 실행해 검증한다 — 문법 체크로는 못 잡는 실패가 있었다.
+    #
+    # 2026-08-09 실측: pipx install 이 (uv 백엔드에서 흔한) 기존 venv 충돌로 실패했는데
+    # install.sh 는 이를 감지하지 못하고 pip 으로, 다시 PEP 668 로 막혀 "오프라인" 폴백으로
+    # 조용히 넘어갔다. 그 폴백은 설치 시점 python3 의 site-packages 에 .pth 를 심었는데,
+    # macOS 는 python3 가 여러 개 흔해서(system·Homebrew·pyenv) 실행 시점 python3 와
+    # 다르면 조용히 깨졌다 — "완료했습니다"를 출력하면서.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 표준 경로로 설치
+        run: bash install.sh
+
+      - name: 설치 폴더 밖에서, 설치에 안 쓴 것처럼 보이는 셸로 검증
+        run: |
+          cd /tmp
+          "$HOME/.local/bin/afterlimit" --version
+          "$HOME/.local/bin/afterlimit" config
+          "$HOME/.local/bin/afterlimit" scan
+
+      - name: launchd 에이전트가 실제로 등록됐는가
+        run: |
+          launchctl print "gui/$(id -u)/io.afterlimit.run" | grep -q "state = "
+          echo "✅ launchd 가 에이전트를 인식함"
+
+      - name: 재설치(업그레이드 경로)도 같은 방식으로 검증
+        run: |
+          bash install.sh
+          cd /tmp && "$HOME/.local/bin/afterlimit" --version

@@ -45,6 +45,22 @@ uninstall() {
   echo "완전히 지우려면: rm -rf $STATE_DIR"
 }
 
+# 방금 설치한 게 실제로 도는지 확인한다. 여기서 조용히 넘어가면 안 된다.
+#
+# 2026-08-09 실측: install.sh 가 "완료했습니다"를 출력했는데 레포 폴더 밖에서는
+# `ModuleNotFoundError: No module named 'afterlimit'` 로 완전히 깨졌다.
+# 원인 둘 — ① pipx install 실패(기존 venv 충돌, uv 백엔드에서 흔함)를 감지하지 못하고
+# pip 으로 조용히 넘어갔다. ② pip 도 PEP 668(Homebrew Python)로 막히면 쓰던
+# "오프라인" 폴백이 설치 시점 python3 의 site-packages 에 .pth 를 심었는데, macOS 는
+# python3 가 여러 개 흔해서(system·Homebrew·pyenv) 실행 시점 python3 와 다르면 못 찾는다.
+verify_install() {
+  local out
+  out=$(cd /tmp && env -u PYTHONPATH "$BIN_DIR/afterlimit" --version 2>&1) \
+    || die "설치했지만 실행이 안 됩니다: $out"
+  [[ "$out" == afterlimit* ]] || die "설치했지만 버전 확인에 실패했습니다: $out"
+  info "검증: $out"
+}
+
 install_bin() {
   command -v python3 >/dev/null || die "python3 가 필요합니다."
   python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
@@ -55,26 +71,42 @@ install_bin() {
 
   # 표준 설치를 우선하되, 인터넷/pip 이 없어도 동작하도록 폴백을 둔다.
   if command -v pipx >/dev/null; then
-    pipx install --force "$REPO_DIR" >/dev/null && { info "pipx 로 설치했습니다."; return 0; }
+    # --force 는 uv 백엔드에서 "세션 밖에서 만든 venv" 를 만나면 실패한다(재현됨).
+    # 실패하면 지우고 새로 깐다 — 업그레이드 시 항상 거치는 정상 경로로 만든다.
+    if ! pipx install --force "$REPO_DIR" >/tmp/afterlimit_pipx.log 2>&1; then
+      pipx uninstall afterlimit >/dev/null 2>&1 || true
+      pipx install "$REPO_DIR" >/tmp/afterlimit_pipx.log 2>&1
+    fi
+    if [[ -x "$BIN_DIR/afterlimit" ]]; then
+      info "pipx 로 설치했습니다."
+      verify_install
+      return 0
+    fi
+    info "pipx 설치가 흔적을 못 남겼습니다 — 로그: /tmp/afterlimit_pipx.log"
   fi
   if python3 -m pip --version >/dev/null 2>&1; then
-    python3 -m pip install --user --quiet "$REPO_DIR" && { info "pip --user 로 설치했습니다."; return 0; }
+    if python3 -m pip install --user --quiet "$REPO_DIR" 2>/tmp/afterlimit_pip.log; then
+      info "pip --user 로 설치했습니다."
+      verify_install
+      return 0
+    fi
+    info "pip --user 설치 실패(PEP 668 등) — 로그: /tmp/afterlimit_pip.log"
   fi
 
-  # 폴백: 의존성이 0 이므로 저장소를 경로에 얹고 얇은 실행 파일만 둔다 (인터넷 불필요)
-  info "pipx/pip 을 쓸 수 없어 오프라인 방식으로 설치합니다."
+  # 최종 폴백: 이 설치 전용 가상환경을 만든다. python3 여러 버전이 섞인 macOS 에서도
+  # 실행 파일이 그 venv 의 python 을 절대경로로 직접 부르므로 어긋날 일이 없다.
+  info "pipx/pip 을 쓸 수 없어 전용 가상환경으로 설치합니다."
+  local venv="$STATE_DIR/venv"
+  rm -rf "$venv"
+  python3 -m venv "$venv" || die "venv 생성 실패"
+  "$venv/bin/pip" install --quiet "$REPO_DIR" || die "venv 안에서 설치 실패"
   cat > "$BIN_DIR/afterlimit" <<EOF
 #!/usr/bin/env bash
-exec python3 -m afterlimit.cli "\$@"
+exec "$venv/bin/python3" -m afterlimit.cli "\$@"
 EOF
   chmod +x "$BIN_DIR/afterlimit"
-  python3 - "$REPO_DIR" <<'PY'
-import pathlib, site, sys
-target = pathlib.Path(site.getusersitepackages())
-target.mkdir(parents=True, exist_ok=True)
-(target / "afterlimit.pth").write_text(sys.argv[1] + "\n")
-PY
-  info "afterlimit 을 $BIN_DIR 에 설치했습니다 (오프라인)."
+  info "afterlimit 을 전용 가상환경으로 설치했습니다 ($venv)."
+  verify_install
 }
 
 install_slash_commands() {
