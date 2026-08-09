@@ -190,7 +190,7 @@ def test_살아있는_주인의_잠금은_존중한다(tmp_path):
 def test_PID를_못_읽으면_잠금을_존중한다(tmp_path):
     cfg = Config(state_dir=tmp_path / "state")
     cfg.lock_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.lock_dir / "run.lock").write_text("망가진값")
+    (cfg.lock_dir / "run.lock").write_text("망가진값", encoding="utf-8")
     assert cli._acquire_lock(cfg) is None  # 애매하면 남기는 쪽
 
 
@@ -249,3 +249,50 @@ def test_로그인_풀린_직후엔_사이클_전체를_건너뛴다():
 
 def test_인증만료_기록이_없으면_평소대로_진행한다():
     assert cli._auth_ready({}, NOW) is None
+
+
+# ── Windows 프로세스 존재 확인 ─────────────────────────────────────────────
+#
+# 회귀 방지. `os.kill(pid, 0)` 은 POSIX 관용구다. Windows CI 실측(2026-08-09):
+# `OSError: [WinError 87] The parameter is incorrect` 로 죽었다. ctypes 를 가짜로
+# 바꿔치기해서 macOS/Linux 에서도 Windows 분기를 검증한다.
+
+def test_windows_에서는_OpenProcess_로_존재를_확인한다(monkeypatch):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+
+    class _FakeKernel32:
+        def __init__(self, handle):
+            self._handle = handle
+            self.closed = False
+
+        def OpenProcess(self, access, inherit, pid):
+            return self._handle
+
+        def CloseHandle(self, handle):
+            self.closed = True
+
+    class _FakeCtypes:
+        def __init__(self, handle, last_error=0):
+            self._k = _FakeKernel32(handle)
+            self._last_error = last_error
+
+        def WinDLL(self, name, use_last_error=True):
+            return self._k
+
+        def get_last_error(self):
+            return self._last_error
+
+    import sys as _sys
+
+    live = _FakeCtypes(handle=1)
+    monkeypatch.setitem(_sys.modules, "ctypes", live)
+    assert cli._pid_exists(1234) is True
+    assert live._k.closed is True  # 핸들을 닫았다
+
+    denied = _FakeCtypes(handle=0, last_error=5)  # ERROR_ACCESS_DENIED
+    monkeypatch.setitem(_sys.modules, "ctypes", denied)
+    assert cli._pid_exists(1234) is True  # 접근 거부 = 살아있는 남의 프로세스
+
+    gone = _FakeCtypes(handle=0, last_error=87)  # ERROR_INVALID_PARAMETER
+    monkeypatch.setitem(_sys.modules, "ctypes", gone)
+    assert cli._pid_exists(1234) is False

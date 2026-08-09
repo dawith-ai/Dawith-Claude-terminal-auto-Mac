@@ -1,5 +1,25 @@
 # 변경 기록
 
+## 0.2.3 — 2026-08-09
+
+0.2.2 에서 추가한 `windows-install` CI 가 첫 실행에서 바로 진짜 결함 두 종류를 잡았다.
+CI 를 만든 보람이 있었다 — 실제 Windows 환경 없이는 못 찾았을 것들이다.
+
+### 고침
+
+- **`os.kill(pid, 0)` 이 Windows 에서 `OSError: [WinError 87]` 로 죽던 문제.** 죽은 잠금을
+  치우는 로직이 "프로세스가 살아있나" 확인에 POSIX 전용 관용구를 썼다. Windows 엔 그
+  신호 체계가 없다. 커널 API(`OpenProcess`)로 직접 확인하도록 바꿨다 — 새 의존성 없이
+  (`ctypes` 는 표준 라이브러리). 접근 거부와 존재하지 않음을 구분해 "애매하면 살아있다고
+  본다"는 안전 원칙을 그대로 지켰다.
+- **한글 메시지를 출력하면 Windows 에서 `UnicodeEncodeError` 로 죽던 문제.** Windows 콘솔은
+  로캘 코드페이지(cp1252 등)를 기본으로 쓴다. 이 도구는 한글로 말하므로, 이게 없으면
+  `afterlimit scan`/`config` 등 거의 모든 명령이 Windows 에서 죽었다. `main()` 진입 시
+  stdout/stderr 를 UTF-8 로 강제한다.
+- 테스트 파일의 `write_text` 호출에도 같은 이유로 `encoding="utf-8"` 을 명시했다(파이썬은
+  인코딩을 안 주면 플랫폼 로캘을 따른다 — 그게 Windows CI 에서 실패의 근본 원인이었다).
+- 회귀 테스트 1개 추가(가짜 `ctypes` 로 Windows 분기를 macOS/Linux 에서도 검증, 총 82 통과).
+
 ## 0.2.2 — 2026-08-09
 
 macOS 를 고친 뒤 "윈도우도 확실하냐"는 질문에 실제로 PowerShell 을 설치해 돌려보고 답했다.

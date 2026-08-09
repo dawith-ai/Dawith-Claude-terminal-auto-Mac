@@ -82,7 +82,7 @@ def test_시작시각을_모르면_나이로_거르지_않는다(tmp_path, cfg):
     d = tmp_path / "projects" / "proj"
     d.mkdir(parents=True)
     f = d / "s.jsonl"
-    f.write_text("not json\n" + _limit_msg() + "\n" + _line(cwd="/work/repo") + "\n")
+    f.write_text("not json\n" + _limit_msg() + "\n" + _line(cwd="/work/repo") + "\n", encoding="utf-8")
     import os
 
     os.utime(f, (NOW.timestamp(), NOW.timestamp()))
@@ -144,7 +144,7 @@ def test_cwd가_없으면_재개할_수_없다(tmp_path, cfg):
     d = tmp_path / "projects" / "proj"
     d.mkdir(parents=True)
     f = d / "s.jsonl"
-    f.write_text(_limit_msg() + "\n")  # cwd 없음
+    f.write_text(_limit_msg() + "\n", encoding="utf-8")  # cwd 없음
     import os
 
     os.utime(f, (NOW.timestamp(), NOW.timestamp()))

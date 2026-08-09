@@ -51,18 +51,27 @@ def _commit(cfg: Config, mutate) -> None:
     _save_state(cfg, fresh)
 
 
-def _owner_alive(lock: Path) -> bool:
-    """잠금을 만든 프로세스가 아직 살아 있나.
+def _pid_exists(pid: int) -> bool:
+    """PID 가 가리키는 프로세스가 지금 살아 있나. POSIX/Windows 둘 다 지원.
 
-    확실히 죽었을 때만 False 를 준다. 읽을 수 없거나 남의 프로세스면 살아 있다고 본다 —
-    PID 는 재사용되므로, 애매하면 잠금을 남기는 쪽이 안전하다(나이 제한이 결국 치운다).
+    ⚠️ `os.kill(pid, 0)` 은 POSIX 관용구다. Windows 는 신호 0 이라는 게 없어서
+    `OSError: [WinError 87] The parameter is incorrect` 로 죽는다 — 실측(CI, 2026-08-09).
+    Windows 에선 커널 API(OpenProcess)로 직접 확인한다. 새 의존성은 안 쓴다(zero-dep 유지).
     """
-    try:
-        pid = int(lock.read_text().strip())
-    except (OSError, ValueError):
-        return True
-    if pid <= 0:
-        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        ERROR_ACCESS_DENIED = 5
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        # get_last_error() 가 실제 값을 돌려주려면 이 DLL 핸들을 use_last_error=True 로 열어야 한다
+        # (ctypes.windll.kernel32 의 기본 핸들은 그 값을 안 채운다).
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        # 접근 거부 = 존재는 하지만 남의 프로세스(POSIX 의 PermissionError 와 대응) → 살아있다고 본다.
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
     try:
         os.kill(pid, 0)  # 신호 0 = 존재 확인만
     except ProcessLookupError:
@@ -70,6 +79,21 @@ def _owner_alive(lock: Path) -> bool:
     except PermissionError:
         return True  # 살아 있는 남의 프로세스
     return True
+
+
+def _owner_alive(lock: Path) -> bool:
+    """잠금을 만든 프로세스가 아직 살아 있나.
+
+    확실히 죽었을 때만 False 를 준다. 읽을 수 없거나 남의 프로세스면 살아 있다고 본다 —
+    PID 는 재사용되므로, 애매하면 잠금을 남기는 쪽이 안전하다(나이 제한이 결국 치운다).
+    """
+    try:
+        pid = int(lock.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    return _pid_exists(pid)
 
 
 def _acquire_lock(cfg: Config) -> Path | None:
@@ -320,7 +344,24 @@ def cmd_config(cfg: Config) -> int:
     return 0
 
 
+def _force_utf8_console() -> None:
+    """stdout/stderr 를 UTF-8 로 강제한다.
+
+    실측(CI, 2026-08-09): Windows 콘솔은 cp1252 등 로캘 코드페이지를 기본으로 쓴다.
+    한글 문자열을 출력하는 순간 `UnicodeEncodeError` 로 죽는다 — 도구 자체가 한글
+    메시지를 쓰므로 Windows 에서는 이게 없으면 거의 항상 죽는다. macOS·Linux 는
+    보통 이미 UTF-8 이라 조용히 통과한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass  # 리다이렉트 등으로 못 바꾸면 원래 인코딩으로 최선을 다한다
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_console()
     parser = argparse.ArgumentParser(
         prog="afterlimit",
         description="AI 코딩 에이전트가 사용량 한도로 멈춰도, 풀리면 스스로 이어가게 합니다.",
