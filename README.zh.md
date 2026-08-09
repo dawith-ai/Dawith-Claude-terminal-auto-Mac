@@ -93,9 +93,14 @@ afterlimit config   # 它在看哪里、你的时区、通知设置
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+如果 Codex 会话目录不存在（未安装），会静默跳过——没理由为此设开关。将 `enable_codex` 设为 `false` 可只监视 Claude Code（0.3.0 之前的行为）。
 
 通知可发往任何接受 JSON 的 webhook——Slack、Discord 或你自己的端点（负载格式按 URL 选择）。没有 webhook 就没有通知，其余一切不变。也可用环境变量 `AFTERLIMIT_WEBHOOK_URL`。
 
@@ -117,11 +122,13 @@ afterlimit --dry-run run    # 只显示会恢复什么，不执行
 
 AfterLimit 恢复的是**无头（headless）**会话——代理无需运行；它读取日志并继续工作。这刻意做到不依赖编辑器与终端：无论你用普通终端、VS Code 还是其他方式驱动 Claude Code，都能工作。
 
+**同时关注 Claude Code 与 Codex CLI。**它只扫描存在的会话日志，所以只用其中一个或两个都用，行为一致。Codex 通过结构化字段（`codex_error_info`）报告错误类型，而不是自由文本——不需要用正则猜测。Codex CLI 各版本的日志结构也不一致（旧版本把错误记为独立事件；新版本把错误嵌套在 `task_complete` 事件里）——两种都支持。
+
 尚未处理的，诚实列出：
 
 - **交互式 TUI 恢复**——在*运行中*的 tmux 窗格里、对话中途被阻塞时按下 “continue”。早期原型做过这个；它仅限 tmux 且脆弱，因此留作未来的可选模式，而非半成品发布。
-- **其他代理**——目前会话日志格式为 Claude Code 所有。上限解析核心与代理无关，欢迎为其他 CLI 贡献适配器。
-- **Windows**——调度器接线为 macOS/Linux；Python 核心是可移植的。
+- **其他代理** — Claude Code 与 Codex 均已覆盖。欢迎为其他 CLI 贡献适配器；上限解析核心本身与代理无关。
+- **Windows 调度器** — `install.ps1` 会注册一个 Task Scheduler 任务；CLI 和测试在 CI 里的 Windows 上运行。CI 唯一无法证明的是 Task Scheduler 在真实桌面上*触发*——用 `Get-ScheduledTask AfterLimit` 自行验证。
 
 ## 设计说明
 

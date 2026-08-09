@@ -93,9 +93,14 @@ Fonctionne sans configuration. Pour modifier, déposez un `config.json` dans `~/
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+Si le répertoire de sessions Codex n'existe pas (non installé), il est ignoré silencieusement — aucune raison de conditionner cela. Mettez `enable_codex` à `false` pour ne surveiller que Claude Code (comportement pré-0.3.0).
 
 Les notifications vont vers tout webhook acceptant du JSON — Slack, Discord ou votre propre point de terminaison (le format de la charge est choisi selon l'URL). Sans webhook, pas de notifications ; rien d'autre ne change. Vous pouvez aussi définir `AFTERLIMIT_WEBHOOK_URL` dans l'environnement.
 
@@ -117,11 +122,13 @@ Supprime la tâche en arrière-plan et le CLI. Vos fichiers d'état restent dans
 
 AfterLimit reprend des sessions **headless** — l'agent n'a pas besoin d'être en cours d'exécution ; il lit les journaux et poursuit le travail. C'est volontairement indépendant de l'éditeur et du terminal : cela fonctionne que vous pilotiez Claude Code depuis un terminal simple, VS Code ou ailleurs.
 
+**Surveille à la fois Claude Code et Codex CLI.** Il scanne les journaux de session qui existent, donc utiliser l'un ou l'autre — ou les deux — fonctionne pareil. Codex signale le type d'erreur via un champ structuré (`codex_error_info`) plutôt qu'en texte libre — pas besoin de deviner avec des regex. Les versions de Codex CLI divergent aussi sur la forme du journal (les anciennes consignent l'erreur comme un événement autonome ; les récentes l'imbriquent dans un événement `task_complete`) — les deux sont prises en charge.
+
 Ce qui n'est pas encore couvert, dit honnêtement :
 
 - **Reprise en TUI interactive** — appuyer sur « continue » dans un volet tmux *actif* bloqué en pleine conversation. Un prototype antérieur le faisait ; réservé à tmux et fragile, il est donc laissé comme futur mode optionnel plutôt que publié à moitié.
-- **Autres agents** — le format des journaux de session est aujourd'hui celui de Claude Code. Le cœur d'analyse de la limite est indépendant de l'agent ; les adaptateurs pour d'autres CLI sont bienvenus.
-- **Windows** — le câblage du planificateur vise macOS/Linux ; le cœur Python est portable.
+- **Autres agents** — Claude Code et Codex sont couverts. Les adaptateurs pour d'autres CLI sont bienvenus ; le cœur d'analyse de la limite lui-même est indépendant de l'agent.
+- **Planificateur Windows** — `install.ps1` enregistre une tâche Task Scheduler ; la CLI et les tests tournent sous Windows en CI. La seule chose que la CI ne peut pas prouver, c'est que Task Scheduler se *déclenche* réellement sur un bureau en direct — vérifiez avec `Get-ScheduledTask AfterLimit`.
 
 ## Notes de conception
 

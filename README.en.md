@@ -99,9 +99,14 @@ Defaults work with no config. To change anything, drop a `config.json` at `~/.co
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+If the Codex sessions directory doesn't exist (not installed), it's skipped silently — no reason to gate it behind anything. Set `enable_codex` to `false` to watch Claude Code only (pre-0.3.0 behavior).
 
 Notifications go to any webhook that accepts JSON — Slack, Discord, or your own endpoint (the payload shape is chosen from the URL). No webhook, no notifications; nothing else changes. You can also set `AFTERLIMIT_WEBHOOK_URL` in the environment.
 
@@ -123,10 +128,12 @@ Removes the background job and CLI. Your state files stay under `~/.local/state/
 
 AfterLimit resumes **headless** sessions — the agent doesn't need to be running; it reads the logs and continues the work. This is deliberately editor- and terminal-agnostic: it works whether you drive Claude Code from a plain terminal, VS Code, or anywhere else.
 
+**Watches both Claude Code and Codex CLI.** It scans whichever session logs exist, so using just one or both works the same way. Codex reports its error kind through a structured field (`codex_error_info`) rather than free text — no regex-guessing needed. Codex CLI versions also disagree on log shape (older versions log errors as a standalone event; newer ones nest the error inside a `task_complete` event) — both are supported.
+
 Not yet handled, and honestly noted:
 
 - **Interactive TUI resume** — pressing "continue" inside a *live* tmux pane that's blocked mid-conversation. A previous prototype did this; it's tmux-only and fragile, so it's left for a future opt-in mode rather than shipped half-working.
-- **Other agents** — the session-log format is Claude Code's today. The limit-parsing core is agent-agnostic; adapters for other CLIs are welcome.
+- **Other agents** — Claude Code and Codex are covered. Adapters for other CLIs are welcome; the limit-parsing core is agent-agnostic.
 - **Windows scheduler** — `install.ps1` registers a Task Scheduler job; the CLI and tests run on Windows in CI. The Task Scheduler *firing* on a live desktop is the one thing CI can't prove — verify with `Get-ScheduledTask AfterLimit`.
 
 ## Design notes

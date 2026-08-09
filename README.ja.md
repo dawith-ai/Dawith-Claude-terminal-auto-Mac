@@ -93,9 +93,14 @@ afterlimit config   # どこを見ているか、タイムゾーン、通知設�
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+Codex のセッションディレクトリが存在しなければ（未インストールなら）静かにスキップします——それをゲートする理由はありません。`enable_codex` を `false` にすると Claude Code だけを監視します（0.3.0 以前の動作）。
 
 通知は JSON を受け取る webhook ならどこへでも送れます——Slack、Discord、または独自のエンドポイント（ペイロード形式は URL から選択）。webhook が無ければ通知も無く、それ以外は何も変わりません。環境変数 `AFTERLIMIT_WEBHOOK_URL` でも設定できます。
 
@@ -117,11 +122,13 @@ afterlimit --dry-run run    # 何を再開するかだけ表示し、実行は�
 
 AfterLimit は**ヘッドレス**セッションを再開します——エージェントが動いている必要はなく、ログを読んで作業を続けます。これは意図的にエディタ・端末非依存です。Claude Code を素の端末で動かしても、VS Code で動かしても、どこでも動作します。
 
+**Claude Code と Codex CLI の両方を監視します。**存在するセッションログをスキャンするだけなので、片方だけでも両方でも同じように動作します。Codex はエラーの種類を自由文ではなく構造化フィールド（`codex_error_info`）で伝えるので、正規表現で推測する必要がありません。Codex CLI のバージョンによってログの形も違います（旧バージョンはエラーを独立イベントとして記録し、新バージョンは `task_complete` イベントの中に入れ子にします）——両方に対応しています。
+
 まだ扱っていないこと、正直に記します:
 
 - **対話型 TUI 再開**——*動作中*の tmux ペインで会話中にブロックされたときに「continue」を押すこと。以前のプロトタイプはこれを行いましたが、tmux 専用で壊れやすいため、中途半端に出荷せず将来のオプトインモードとして残します。
-- **他のエージェント**——現在セッションログ形式は Claude Code のものです。上限解析のコアはエージェント非依存なので、他の CLI 用アダプタの貢献を歓迎します。
-- **Windows**——スケジューラ配線は macOS/Linux 向けです。Python コアは移植可能です。
+- **他のエージェント** — Claude Code と Codex はカバー済みです。他の CLI 用アダプタの貢献を歓迎します——上限解析のコア自体はエージェント非依存です。
+- **Windows スケジューラ** — `install.ps1` が Task Scheduler ジョブを登録します。CLI とテストは CI 上の Windows でも動きます。CI が証明できない唯一のことは、実機デスクトップで Task Scheduler が実際に*発火する*ことです——`Get-ScheduledTask AfterLimit` で確認してください。
 
 ## 設計ノート
 

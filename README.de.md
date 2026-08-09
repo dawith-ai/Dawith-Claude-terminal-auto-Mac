@@ -93,9 +93,14 @@ Läuft ohne Konfiguration. Zum Ändern lege eine `config.json` in `~/.config/aft
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+Existiert das Codex-Sitzungsverzeichnis nicht (nicht installiert), wird es stillschweigend übersprungen — kein Grund, das hinter einen Schalter zu stellen. Setze `enable_codex` auf `false`, um nur Claude Code zu beobachten (Verhalten vor 0.3.0).
 
 Benachrichtigungen gehen an jeden Webhook, der JSON akzeptiert — Slack, Discord oder deinen eigenen Endpunkt (das Payload-Format wird anhand der URL gewählt). Kein Webhook, keine Benachrichtigungen; sonst ändert sich nichts. Du kannst auch `AFTERLIMIT_WEBHOOK_URL` in der Umgebung setzen.
 
@@ -117,11 +122,13 @@ Entfernt den Hintergrundjob und das CLI. Deine Zustandsdateien bleiben unter `~/
 
 AfterLimit setzt **headless**-Sitzungen fort — der Agent muss nicht laufen; es liest die Protokolle und macht mit der Arbeit weiter. Das ist bewusst editor- und terminalunabhängig: Es funktioniert, egal ob du Claude Code aus einem einfachen Terminal, VS Code oder anderswo steuerst.
 
+**Beobachtet sowohl Claude Code als auch Codex CLI.** Es scannt, welche Sitzungsprotokolle auch immer existieren — nur eines zu nutzen oder beide funktioniert gleich. Codex meldet die Fehlerart über ein strukturiertes Feld (`codex_error_info`) statt Freitext — kein Rätselraten per Regex nötig. Codex-CLI-Versionen sind sich auch bei der Protokollform uneinig (ältere loggen den Fehler als eigenständiges Ereignis; neuere verschachteln ihn in einem `task_complete`-Ereignis) — beide werden unterstützt.
+
 Was noch nicht abgedeckt ist, ehrlich benannt:
 
 - **Interaktive TUI-Wiederaufnahme** — „continue“ in einem *aktiven* tmux-Pane drücken, das mitten im Gespräch blockiert ist. Ein früherer Prototyp tat das; er ist tmux-only und fragil, daher bleibt er als künftiger Opt-in-Modus statt halbfertig veröffentlicht.
-- **Andere Agents** — das Sitzungsprotokoll-Format ist heute das von Claude Code. Der Kern der Limit-Analyse ist agent-unabhängig; Adapter für andere CLIs sind willkommen.
-- **Windows** — die Scheduler-Verdrahtung zielt auf macOS/Linux; der Python-Kern ist portabel.
+- **Andere Agents** — Claude Code und Codex sind bereits abgedeckt. Adapter für andere CLIs sind willkommen; der Kern der Limit-Analyse selbst ist agent-unabhängig.
+- **Windows-Scheduler** — `install.ps1` registriert einen Task-Scheduler-Job; CLI und Tests laufen unter Windows in CI. Das Einzige, was CI nicht beweisen kann, ist, dass der Task Scheduler auf einem echten Desktop tatsächlich *auslöst* — prüfe das mit `Get-ScheduledTask AfterLimit`.
 
 ## Designnotizen
 

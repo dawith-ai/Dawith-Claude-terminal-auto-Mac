@@ -93,9 +93,14 @@ Funciona sem configuração. Para mudar, coloque um `config.json` em `~/.config/
   "resume_cooldown_hours": 5,
   "max_session_age_days": 3,
   "resume_prompt": "Continue the work that was in progress...",
-  "webhook_url": "https://hooks.slack.com/services/..."
+  "webhook_url": "https://hooks.slack.com/services/...",
+  "enable_codex": true,
+  "codex_sessions_dir": "~/.codex/sessions",
+  "codex_bin": "codex"
 }
 ```
+
+Se o diretório de sessões do Codex não existir (não instalado), é ignorado silenciosamente — não há motivo para condicionar isso. Defina `enable_codex` como `false` para observar somente o Claude Code (comportamento anterior à 0.3.0).
 
 As notificações vão para qualquer webhook que aceite JSON — Slack, Discord ou seu próprio endpoint (o formato do payload é escolhido pela URL). Sem webhook, sem notificações; nada mais muda. Você também pode definir `AFTERLIMIT_WEBHOOK_URL` no ambiente.
 
@@ -117,11 +122,13 @@ Remove o trabalho em segundo plano e o CLI. Seus arquivos de estado permanecem e
 
 O AfterLimit retoma sessões **headless** — o agente não precisa estar em execução; ele lê os registros e continua o trabalho. Isso é deliberadamente independente de editor e terminal: funciona quer você use o Claude Code de um terminal simples, do VS Code ou de qualquer outro lugar.
 
+**Observa tanto o Claude Code quanto o Codex CLI.** Ele varre os registros de sessão que existirem, então usar apenas um ou os dois funciona do mesmo jeito. O Codex informa o tipo de erro por um campo estruturado (`codex_error_info`) em vez de texto livre — sem precisar adivinhar com regex. As versões do Codex CLI também divergem no formato do log (versões antigas registram o erro como um evento independente; versões novas o aninham dentro de um evento `task_complete`) — ambas são suportadas.
+
 O que ainda não é coberto, dito com honestidade:
 
 - **Retomada em TUI interativa** — pressionar «continue» dentro de um painel tmux *ativo* bloqueado no meio da conversa. Um protótipo anterior fazia isso; é só para tmux e frágil, então fica como um modo opcional futuro em vez de ser publicado pela metade.
-- **Outros agentes** — hoje o formato de registro de sessão é o do Claude Code. O núcleo de análise do limite é independente do agente; adaptadores para outros CLIs são bem-vindos.
-- **Windows** — a fiação do agendador é para macOS/Linux; o núcleo em Python é portável.
+- **Outros agentes** — Claude Code e Codex já estão cobertos. Adaptadores para outros CLIs são bem-vindos; o núcleo de análise do limite em si é independente do agente.
+- **Agendador do Windows** — `install.ps1` registra uma tarefa no Task Scheduler; a CLI e os testes rodam no Windows na CI. A única coisa que a CI não consegue provar é o Task Scheduler realmente *disparar* num desktop real — verifique com `Get-ScheduledTask AfterLimit`.
 
 ## Notas de design
 
