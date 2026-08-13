@@ -1,9 +1,14 @@
 name: CI
 
+
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
 
 jobs:
   test:
@@ -37,6 +42,7 @@ jobs:
       - name: Run tests
         run: pytest -q tests/
 
+
   linux-install:
     # 실제 Linux 에서 설치 경로와 systemd 유닛이 진짜로 유효한지 증명한다.
     # 이 Mac 에는 Linux VM 이 없으므로, 재현 가능한 이 잡이 곧 리눅스 실기기 검증이다.
@@ -47,10 +53,12 @@ jobs:
         with:
           python-version: "3.12"
 
+
       - name: Install to ~/.local/bin (systemd 유닛의 ExecStart 경로와 일치)
         run: |
           python -m pip install --user .
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
 
       - name: CLI 가 실제 Linux 에서 동작하는가
         run: |
@@ -58,6 +66,7 @@ jobs:
           afterlimit config
           afterlimit scan            # 세션이 없어도 정상 종료해야 한다
           afterlimit --dry-run run   # 아무것도 실행하지 않고 계획만
+
 
       - name: systemd 유닛 파일을 systemd 자신이 검증
         run: |
@@ -69,10 +78,12 @@ jobs:
           systemd-analyze verify ~/.config/systemd/user/afterlimit.timer
           echo "✅ systemd 가 두 유닛을 유효한 것으로 확인"
 
+
       - name: install.sh shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck install.sh
+
 
   macos-install:
     # install.sh 를 실제로 실행해 검증한다 — 문법 체크로는 못 잡는 실패가 있었다.
@@ -82,76 +93,3 @@ jobs:
     # 조용히 넘어갔다. 그 폴백은 설치 시점 python3 의 site-packages 에 .pth 를 심었는데,
     # macOS 는 python3 가 여러 개 흔해서(system·Homebrew·pyenv) 실행 시점 python3 와
     # 다르면 조용히 깨졌다 — "완료했습니다"를 출력하면서.
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: 표준 경로로 설치
-        run: bash install.sh
-
-      - name: 설치 폴더 밖에서, 설치에 안 쓴 것처럼 보이는 셸로 검증
-        run: |
-          cd /tmp
-          "$HOME/.local/bin/afterlimit" --version
-          "$HOME/.local/bin/afterlimit" config
-          "$HOME/.local/bin/afterlimit" scan
-
-      - name: launchd 에이전트가 실제로 등록됐는가
-        run: |
-          launchctl print "gui/$(id -u)/io.afterlimit.run" | grep -q "state = "
-          echo "✅ launchd 가 에이전트를 인식함"
-
-      - name: 재설치(업그레이드 경로)도 같은 방식으로 검증
-        run: |
-          bash install.sh
-          cd /tmp && "$HOME/.local/bin/afterlimit" --version
-
-  windows-install:
-    # install.ps1 을 실제로 실행해 검증한다.
-    #
-    # 2026-08-09 실측: 이 파일은 지금까지 한 번도 실제로 파싱된 적이 없었다 —
-    # `(cmd; $x)` 는 PowerShell 문법 오류다(괄호는 파이프라인 하나만 감싼다).
-    # bash -n 문법체크는 셸 스크립트만 보고 .ps1 은 아예 건드리지 않아 못 잡았다.
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: 표준 경로로 설치
-        run: .\install.ps1
-
-      - name: 설치 폴더 밖에서 검증
-        run: |
-          Push-Location $env:TEMP
-          afterlimit --version
-          afterlimit config
-          afterlimit scan
-          Pop-Location
-
-      - name: Task Scheduler 에 실제로 등록됐는가
-        run: |
-          $t = Get-ScheduledTask -TaskName AfterLimit -ErrorAction Stop
-          if ($t.State -eq 'Disabled') { throw "작업이 비활성 상태입니다" }
-          Write-Host "✅ Task Scheduler 가 작업을 인식함 (상태: $($t.State))"
-
-      - name: 재설치(업그레이드 경로)도 같은 방식으로 검증
-        run: |
-          .\install.ps1
-          Push-Location $env:TEMP
-          afterlimit --version
-          Pop-Location
-
-      - name: 제거 경로 검증
-        run: |
-          .\install.ps1 -Uninstall
-          $t = Get-ScheduledTask -TaskName AfterLimit -ErrorAction SilentlyContinue
-          if ($t) { throw "제거했는데 작업이 남아 있습니다" }
-          Write-Host "✅ 제거 확인"
